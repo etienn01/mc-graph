@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MeshCore Graph</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0f1117;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', monospace;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 18px;
+    background: #1a1d27;
+    border-bottom: 1px solid #2a2d3a;
+    flex-shrink: 0;
+  }
+
+  header h1 {
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: .05em;
+    color: #7eb8f7;
+  }
+
+  #status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: .75rem;
+    color: #888;
+  }
+
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #555;
+    transition: background .3s;
+  }
+  #status-dot.connected { background: #4caf50; }
+  #status-dot.disconnected { background: #f44336; }
+
+  @keyframes dot-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(76,175,80,.7); }
+    100% { box-shadow: 0 0 0 7px rgba(76,175,80,0); }
+  }
+  #status-dot.pulse { animation: dot-pulse .5s ease-out; }
+
+  main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  #graph-container {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+
+  svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .link {
+    stroke-opacity: 0.7;
+    stroke-width: 1.5;
+  }
+
+  .node circle {
+    stroke-width: 1.5;
+    cursor: pointer;
+  }
+
+  .node text {
+    font-size: 11px;
+    fill: #ccc;
+    pointer-events: none;
+    text-shadow: 0 0 4px #000;
+  }
+
+  .link-label {
+    font-size: 9px;
+    fill: #888;
+    pointer-events: none;
+  }
+
+  /* Tooltip */
+  #tooltip {
+    position: absolute;
+    background: #1e2130cc;
+    border: 1px solid #3a3d50;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: .75rem;
+    pointer-events: none;
+    display: none;
+    max-width: 260px;
+    line-height: 1.6;
+    backdrop-filter: blur(4px);
+  }
+  #tooltip .tip-title { font-weight: 700; color: #7eb8f7; margin-bottom: 4px; }
+  #tooltip .tip-row { color: #aaa; }
+  #tooltip .tip-row span { color: #ddd; }
+
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MeshCore Network Graph</h1>
+  <div id="status-indicator">
+    <div id="status-dot"></div>
+    <span id="status-text">Connecting…</span>
+  </div>
+</header>
+
+<main>
+  <div id="graph-container">
+    <svg id="svg"></svg>
+    <div id="tooltip"></div>
+  </div>
+</main>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+// ── SNR → colour ─────────────────────────────────────────────────────────────
+function snrColor(snr) {
+  if (snr == null || isNaN(snr)) return '#444';
+  if (snr >= 10) return '#4caf50';
+  if (snr >= 5)  return '#8bc34a';
+  if (snr >= 0)  return '#ffc107';
+  if (snr >= -5) return '#ff9800';
+  return '#f44336';
+}
+
+// Best SNR of both directions for coloring the link
+function edgeBestSnr(d) {
+  const vals = [d.snrAB, d.snrBA].filter(v => v != null && !isNaN(v));
+  return vals.length ? Math.max(...vals) : null;
+}
+
+function modeColor(mode) {
+  const m = (mode || '').toLowerCase();
+  if (m === 'repeater')   return '#7eb8f7';
+  if (m === 'companion')  return '#6fcf97';
+  if (m === 'roomserver') return '#cf6f97';
+  if (m === 'sensor')     return '#cfb06f';
+  return '#aaa';
+}
+
+// ── D3 setup ─────────────────────────────────────────────────────────────────
+const svg = d3.select('#svg');
+const container = document.getElementById('graph-container');
+
+let width = container.clientWidth;
+let height = container.clientHeight;
+
+const g = svg.append('g');
+
+// Zoom
+svg.call(d3.zoom().scaleExtent([0.2, 5]).on('zoom', e => g.attr('transform', e.transform)));
+
+const linkGroup = g.append('g').attr('class', 'links');
+const linkLabelAB = g.append('g').attr('class', 'link-labels-ab'); // snrAB near target (B)
+const linkLabelBA = g.append('g').attr('class', 'link-labels-ba'); // snrBA near source (A)
+const nodeGroup = g.append('g').attr('class', 'nodes');
+
+const simulation = d3.forceSimulation()
+  .force('link', d3.forceLink().id(d => d.id).distance(280).strength(0.3))
+  .force('charge', d3.forceManyBody().strength(-1800))
+  .force('center', d3.forceCenter(width / 2, height / 2).strength(0.03))
+  .force('collision', d3.forceCollide(70));
+
+// Keep center force updated on resize
+window.addEventListener('resize', () => {
+  width = container.clientWidth;
+  height = container.clientHeight;
+  simulation.force('center', d3.forceCenter(width / 2, height / 2).strength(0.03));
+  simulation.alpha(0.1).restart();
+});
+
+// Tooltip
+const tooltip = document.getElementById('tooltip');
+
+function showTooltip(event, node) {
+  const lines = [];
+  if (node.name) lines.push(`<div class="tip-title">${node.name}</div>`);
+  lines.push(`<div class="tip-row">ID: <span>${node.id.slice(0, 16)}…</span></div>`);
+  if (node.mode)     lines.push(`<div class="tip-row">Mode: <span>${node.mode}</span></div>`);
+  if (node.model)    lines.push(`<div class="tip-row">Model: <span>${node.model}</span></div>`);
+  if (node.firmware) lines.push(`<div class="tip-row">FW: <span>${node.firmware}</span></div>`);
+  if (node.radio)    lines.push(`<div class="tip-row">Radio: <span>${node.radio}</span></div>`);
+  if (node.stats) {
+    const s = node.stats;
+    if (s.battery_mv) lines.push(`<div class="tip-row">Battery: <span>${(s.battery_mv/1000).toFixed(2)}V</span></div>`);
+    if (s.last_snr != null) lines.push(`<div class="tip-row">Last SNR: <span>${(s.last_snr/4).toFixed(2)} dB</span></div>`);
+    if (s.last_rssi != null) lines.push(`<div class="tip-row">Last RSSI: <span>${s.last_rssi} dBm</span></div>`);
+    if (s.noise_floor != null) lines.push(`<div class="tip-row">Noise floor: <span>${s.noise_floor} dBm</span></div>`);
+  }
+
+  tooltip.innerHTML = lines.join('');
+  tooltip.style.display = 'block';
+  moveTooltip(event);
+}
+
+function moveTooltip(event) {
+  const x = event.offsetX + 14;
+  const y = event.offsetY + 14;
+  tooltip.style.left = x + 'px';
+  tooltip.style.top  = y + 'px';
+}
+
+function hideTooltip() {
+  tooltip.style.display = 'none';
+}
+
+// ── Graph render ─────────────────────────────────────────────────────────────
+let currentNodes = [];
+let currentTopoKey = '';
+
+// Preserve positions between updates
+const positionCache = new Map();
+
+function render(graph) {
+  // Merge positions from simulation into cache
+  currentNodes.forEach(n => {
+    if (n.x != null) positionCache.set(n.id, { x: n.x, y: n.y, vx: n.vx, vy: n.vy });
+  });
+
+  // Build new node/edge arrays, restoring cached positions
+  const nodeMap = new Map();
+  const newNodes = graph.nodes.map(n => {
+    const cached = positionCache.get(n.id);
+    return { ...n, ...(cached || { x: width / 2 + (Math.random() - .5) * 200, y: height / 2 + (Math.random() - .5) * 200 }) };
+  });
+  newNodes.forEach(n => nodeMap.set(n.id, n));
+
+  const newEdges = graph.edges
+    .filter(e => nodeMap.has(e.a) && nodeMap.has(e.b))
+    .map(e => ({ ...e, source: e.a, target: e.b }));
+
+  currentNodes = newNodes;
+
+  // Links
+  const link = linkGroup.selectAll('.link').data(newEdges, d => `${d.a}:${d.b}`);
+  link.enter().append('line').attr('class', 'link');
+  link.exit().remove();
+  linkGroup.selectAll('.link').attr('stroke', d => snrColor(edgeBestSnr(d)));
+
+  // Link labels: one near each endpoint (snrAB near target B, snrBA near source A)
+  const lab = linkLabelAB.selectAll('.link-label').data(newEdges, d => `${d.a}:${d.b}`);
+  lab.enter().append('text').attr('class', 'link-label');
+  lab.exit().remove();
+  linkLabelAB.selectAll('.link-label').text(d => d.snrAB != null ? `${d.snrAB.toFixed(2)}dB` : '');
+
+  const lba = linkLabelBA.selectAll('.link-label').data(newEdges, d => `${d.a}:${d.b}`);
+  lba.enter().append('text').attr('class', 'link-label');
+  lba.exit().remove();
+  linkLabelBA.selectAll('.link-label').text(d => d.snrBA != null ? `${d.snrBA.toFixed(2)}dB` : '');
+
+  // Nodes
+  const node = nodeGroup.selectAll('.node').data(newNodes, d => d.id);
+
+  const nodeEnter = node.enter().append('g').attr('class', 'node')
+    .call(d3.drag()
+      .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag',  (event, d) => { d.fx = event.x; d.fy = event.y; })
+      .on('end',   (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }))
+    .on('mouseover', (event, d) => showTooltip(event, d))
+    .on('mousemove', (event) => moveTooltip(event))
+    .on('mouseout',  () => hideTooltip());
+
+  nodeEnter.append('circle').attr('r', 14);
+  nodeEnter.append('text').attr('dy', 26).attr('text-anchor', 'middle');
+
+  const nodeAll = nodeEnter.merge(node);
+  nodeAll.select('circle')
+    .attr('fill', d => modeColor(d.mode))
+    .attr('stroke', d => d.status === 'online' ? '#fff' : '#444');
+  nodeAll.select('text')
+    .text(d => d.name || d.shortId);
+
+  node.exit().remove();
+
+  simulation
+    .nodes(newNodes)
+    .on('tick', () => {
+      linkGroup.selectAll('.link')
+        .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+
+      // snrAB label near target (B), at 75% along the edge
+      linkLabelAB.selectAll('.link-label')
+        .attr('x', d => d.source.x + (d.target.x - d.source.x) * 0.75)
+        .attr('y', d => d.source.y + (d.target.y - d.source.y) * 0.75);
+
+      // snrBA label near source (A), at 25% along the edge
+      linkLabelBA.selectAll('.link-label')
+        .attr('x', d => d.source.x + (d.target.x - d.source.x) * 0.25)
+        .attr('y', d => d.source.y + (d.target.y - d.source.y) * 0.25);
+
+      nodeGroup.selectAll('.node')
+        .attr('transform', d => `translate(${d.x},${d.y})`);
+    });
+
+  simulation.force('link').links(newEdges);
+
+  // Only disturb the layout when nodes or edges are added/removed,
+  // not on SNR-only or stats-only updates.
+  const topoKey = newNodes.map(n => n.id).sort().join(',') + '|' + newEdges.map(e => `${e.a}:${e.b}`).sort().join(',');
+  if (topoKey !== currentTopoKey) {
+    currentTopoKey = topoKey;
+    simulation.alpha(0.3).restart();
+  }
+}
+
+// ── Socket.io ─────────────────────────────────────────────────────────────────
+const socket = io();
+
+socket.on('connect', () => {
+  document.getElementById('status-dot').className = 'connected';
+  document.getElementById('status-text').textContent = 'Live';
+});
+
+socket.on('disconnect', () => {
+  document.getElementById('status-dot').className = 'disconnected';
+  document.getElementById('status-text').textContent = 'Disconnected';
+});
+
+socket.on('graph', graph => {
+  const dot = document.getElementById('status-dot');
+  dot.classList.remove('pulse');
+  void dot.offsetWidth;
+  dot.classList.add('pulse');
+  render(graph);
+});
+</script>
+</body>
+</html>
