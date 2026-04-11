@@ -234,6 +234,10 @@ function pruneStale() {
   for (const [key, edge] of edges) {
     if ((edge.lastSeen || 0) < cutoff) edges.delete(key);
   }
+  const connectedIds = new Set(Array.from(edges.values()).flatMap(e => [e.a, e.b]));
+  for (const id of nodes.keys()) {
+    if (!connectedIds.has(id)) nodes.delete(id);
+  }
 }
 
 // Load persisted state before starting
@@ -293,7 +297,6 @@ mqttClient.on('message', (topic, payload) => {
 
         if (trace?.isValid && trace.pathHashes?.length > 0) {
           const resolvedHops = trace.pathHashes.map(h => resolveHop(h)).filter(Boolean);
-          resolvedHops.forEach(h => { changed = updateNode(h, {}) || changed; });
 
           const routeType = Buffer.from(data.raw, 'hex')[0] & 0x03;
           const isDirect  = routeType === 0x00 || routeType === 0x02;
@@ -310,7 +313,11 @@ mqttClient.on('message', (topic, payload) => {
             // packet and looks like the true initiator. Those links are captured by FLOOD.
             if (isDirect && (isFirst || isLast)) continue;
             const edgeSnr = isLast ? (snr ?? snrValues[i] ?? null) : (snrValues[i] ?? null);
-            if (edgeSnr != null) changed = recordLink(chain[i], chain[i + 1], edgeSnr) || changed;
+            if (edgeSnr != null) {
+              changed = updateNode(chain[i], {}) || changed;
+              changed = updateNode(chain[i + 1], {}) || changed;
+              changed = recordLink(chain[i], chain[i + 1], edgeSnr) || changed;
+            }
           }
         }
       } catch {}
