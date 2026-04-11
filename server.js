@@ -26,7 +26,14 @@ function loadState() {
     const raw = fs.readFileSync(STATE_FILE, 'utf8');
     const { nodes: ns, edges: es } = JSON.parse(raw);
     ns.forEach(n => nodes.set(n.id, n));
-    es.forEach(e => edges.set(`${e.a}:${e.b}`, e));
+    const fallback = Date.now() - 5 * 24 * 60 * 60 * 1000;
+    es.forEach(e => {
+      const edgeFallback = Math.min(
+        nodes.get(e.a)?.lastSeen ?? fallback,
+        nodes.get(e.b)?.lastSeen ?? fallback,
+      );
+      edges.set(`${e.a}:${e.b}`, { lastSeen: edgeFallback, ...e });
+    });
     console.log(`State loaded: ${nodes.size} nodes, ${edges.size} edges`);
   } catch {
     // No state file yet — start fresh
@@ -81,6 +88,7 @@ function recordLink(senderId, receiverId, snr) {
     ...existing,
     snrAB: isAtoB ? (snrVal ?? existing.snrAB) : existing.snrAB,
     snrBA: isAtoB ? existing.snrBA : (snrVal ?? existing.snrBA),
+    lastSeen: Date.now(),
   };
   edges.set(key, updated);
   return isNew || updated.snrAB !== existing.snrAB || updated.snrBA !== existing.snrBA;
@@ -110,8 +118,11 @@ function resolveHop(shortHash) {
   if (!shortHash || shortHash.length < 2) return null;
   const prefix = shortHash.toUpperCase();
   const matches = [];
-  for (const id of nodes.keys()) {
-    if (id.length > 6 && id.startsWith(prefix)) matches.push(id);
+  for (const [id, node] of nodes) {
+    if (id.length > 6 && id.startsWith(prefix)) {
+      const mode = node.mode?.toLowerCase();
+      if (!mode || mode === 'repeater') matches.push(id);
+    }
   }
   return matches.length === 1 ? matches[0] : prefix;
 }
@@ -215,16 +226,19 @@ function pruneStale() {
   for (const [id, node] of nodes) {
     if ((node.lastSeen || 0) < cutoff) {
       nodes.delete(id);
-      for (const key of edges.keys()) {
-        const e = edges.get(key);
+      for (const [key, e] of edges) {
         if (e.a === id || e.b === id) edges.delete(key);
       }
     }
+  }
+  for (const [key, edge] of edges) {
+    if ((edge.lastSeen || 0) < cutoff) edges.delete(key);
   }
 }
 
 // Load persisted state before starting
 loadState();
+pruneStale();
 setInterval(saveState, SAVE_INTERVAL_MS);
 setInterval(pruneStale, PRUNE_INTERVAL_MS);
 process.on('SIGINT',  () => { saveState(); process.exit(); });

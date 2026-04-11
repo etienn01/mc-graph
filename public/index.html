@@ -32,6 +32,43 @@
     color: #7eb8f7;
   }
 
+  #search-wrap {
+    position: relative;
+  }
+  #search-input {
+    background: #0f1117;
+    border: 1px solid #2a2d3a;
+    border-radius: 4px;
+    color: #ddd;
+    font-size: .8rem;
+    padding: 4px 10px;
+    width: 200px;
+    outline: none;
+  }
+  #search-input:focus { border-color: #4a5068; }
+  #search-results {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    width: 100%;
+    background: #1a1d27;
+    border: 1px solid #2a2d3a;
+    border-radius: 4px;
+    display: none;
+    z-index: 100;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  #search-results.open { display: block; }
+  .sr-item {
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: .78rem;
+    color: #ccc;
+  }
+  .sr-item:hover { background: #252838; }
+  .sr-item-sub { font-size: .68rem; color: #555; }
+
   #status-indicator {
     display: flex;
     align-items: center;
@@ -73,7 +110,7 @@
   }
 
   .link {
-    stroke-opacity: 0.7;
+    stroke-opacity: 0.8;
     stroke-width: 1.5;
   }
 
@@ -113,12 +150,51 @@
   #tooltip .tip-row { color: #aaa; }
   #tooltip .tip-row span { color: #ddd; }
 
+  /* Detail panel */
+  #detail-panel {
+    position: relative;
+    flex-shrink: 0;
+    width: 280px;
+    background: #1a1d27;
+    border-left: 1px solid #2a2d3a;
+    padding: 18px 16px;
+    overflow-y: auto;
+    display: none;
+    font-size: .8rem;
+  }
+  #detail-panel.open { display: block; }
+  #detail-close {
+    position: absolute;
+    top: 14px; right: 16px;
+    cursor: pointer;
+    color: #555;
+    font-size: 1rem;
+    line-height: 1;
+  }
+  #detail-close:hover { color: #ccc; }
+  .dp-title { font-size: 1rem; font-weight: 700; color: #7eb8f7; margin-bottom: 3px; padding-right: 20px; }
+  .dp-id { font-size: .68rem; color: #444; margin-bottom: 12px; word-break: break-all; }
+  .dp-row { color: #777; margin-bottom: 3px; }
+  .dp-row span { color: #ddd; }
+  .dp-section { margin-top: 14px; border-top: 1px solid #2a2d3a; padding-top: 12px; }
+  .dp-section-title { font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; color: #555; margin-bottom: 10px; }
+  .dp-link { margin-bottom: 10px; padding: 8px 10px; background: #0f1117; border-radius: 4px; border: 1px solid #2a2d3a; }
+  .dp-link-name { color: #ccc; font-weight: 600; margin-bottom: 5px; }
+  .dp-link-row { color: #666; font-size: .75rem; margin-bottom: 2px; }
+  .dp-link-row span { color: #bbb; }
+  .dp-link[data-neighbor-id] { cursor: pointer; }
+  .dp-link[data-neighbor-id]:hover { border-color: #4a4d5a; background: #161820; }
+
 </style>
 </head>
 <body>
 
 <header>
   <h1>MeshCore Network Graph</h1>
+  <div id="search-wrap">
+    <input id="search-input" type="text" placeholder="Search nodes…" autocomplete="off">
+    <div id="search-results"></div>
+  </div>
   <div id="status-indicator">
     <div id="status-dot"></div>
     <span id="status-text">Connecting…</span>
@@ -129,6 +205,10 @@
   <div id="graph-container">
     <svg id="svg"></svg>
     <div id="tooltip"></div>
+  </div>
+  <div id="detail-panel">
+    <span id="detail-close">✕</span>
+    <div id="detail-content"></div>
   </div>
 </main>
 
@@ -155,9 +235,18 @@ function modeColor(mode) {
   const m = (mode || '').toLowerCase();
   if (m === 'repeater')   return '#7eb8f7';
   if (m === 'companion')  return '#6fcf97';
-  if (m === 'roomserver') return '#cf6f97';
+  if (m === 'room server') return '#cf6f97';
   if (m === 'sensor')     return '#cfb06f';
   return '#aaa';
+}
+
+function relTime(ts) {
+  if (!ts) return 'unknown';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60)    return `${s}s ago`;
+  if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
 
 // ── D3 setup ─────────────────────────────────────────────────────────────────
@@ -170,7 +259,8 @@ let height = container.clientHeight;
 const g = svg.append('g');
 
 // Zoom
-svg.call(d3.zoom().scaleExtent([0.2, 5]).on('zoom', e => g.attr('transform', e.transform)));
+const zoom = d3.zoom().scaleExtent([0.2, 5]).on('zoom', e => g.attr('transform', e.transform));
+svg.call(zoom);
 
 const linkGroup = g.append('g').attr('class', 'links');
 const linkLabelAB = g.append('g').attr('class', 'link-labels-ab'); // snrAB near target (B)
@@ -234,6 +324,8 @@ let currentTopoKey = '';
 const positionCache = new Map();
 
 function render(graph) {
+  currentGraph = graph;
+  if (selectedNodeId) showDetail(selectedNodeId);
   // Merge positions from simulation into cache
   currentNodes.forEach(n => {
     if (n.x != null) positionCache.set(n.id, { x: n.x, y: n.y, vx: n.vx, vy: n.vy });
@@ -257,7 +349,7 @@ function render(graph) {
   const link = linkGroup.selectAll('.link').data(newEdges, d => `${d.a}:${d.b}`);
   link.enter().append('line').attr('class', 'link');
   link.exit().remove();
-  linkGroup.selectAll('.link').attr('stroke', d => snrColor(edgeBestSnr(d)));
+  updateLinkHighlight();
 
   // Link labels: one near each endpoint (snrAB near target B, snrBA near source A)
   const lab = linkLabelAB.selectAll('.link-label').data(newEdges, d => `${d.a}:${d.b}`);
@@ -280,19 +372,20 @@ function render(graph) {
       .on('end',   (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }))
     .on('mouseover', (event, d) => showTooltip(event, d))
     .on('mousemove', (event) => moveTooltip(event))
-    .on('mouseout',  () => hideTooltip());
+    .on('mouseout',  () => hideTooltip())
+    .on('click', (event, d) => { event.stopPropagation(); showDetail(d.id, { focus: true }); });
 
   nodeEnter.append('circle').attr('r', 14);
   nodeEnter.append('text').attr('dy', 26).attr('text-anchor', 'middle');
 
   const nodeAll = nodeEnter.merge(node);
   nodeAll.select('circle')
-    .attr('fill', d => modeColor(d.mode))
-    .attr('stroke', d => d.status === 'online' ? '#fff' : '#444');
+    .attr('fill', d => modeColor(d.mode));
   nodeAll.select('text')
     .text(d => d.name || d.shortId);
 
   node.exit().remove();
+  updateSelectedIndicator();
 
   simulation
     .nodes(newNodes)
@@ -325,6 +418,156 @@ function render(graph) {
     simulation.alpha(0.3).restart();
   }
 }
+
+// ── Detail panel ─────────────────────────────────────────────────────────────
+let currentGraph = { nodes: [], edges: [] };
+let selectedNodeId = null;
+
+function updateSelectedIndicator() {
+  nodeGroup.selectAll('.node').select('circle')
+    .attr('stroke', d => d.id === selectedNodeId ? '#7eb8f7' : (d.status === 'online' ? '#fff' : '#444'))
+    .attr('stroke-width', d => d.id === selectedNodeId ? 3 : 1.5);
+}
+
+function updateLinkHighlight() {
+  const sel = selectedNodeId;
+  const connected = d => d.a === sel || d.b === sel;
+  linkGroup.selectAll('.link')
+    .attr('stroke', d => !sel ? '#3a4050' : (connected(d) ? '#7eb8f7' : '#2a2d3a'))
+    .attr('stroke-opacity', d => !sel ? 0.8 : (connected(d) ? 1 : 0.3))
+    .attr('stroke-width', d => sel && connected(d) ? 2.5 : 1.5);
+  linkLabelAB.selectAll('.link-label').attr('display', d => sel && connected(d) ? null : 'none');
+  linkLabelBA.selectAll('.link-label').attr('display', d => sel && connected(d) ? null : 'none');
+}
+
+function focusNode(nodeId) {
+  const node = currentNodes.find(n => n.id === nodeId);
+  if (!node || node.x == null) return;
+  const t = d3.zoomTransform(svg.node());
+  svg.transition().duration(500).call(
+    zoom.transform,
+    d3.zoomIdentity.translate(width / 2, height / 2).scale(t.k).translate(-node.x, -node.y)
+  );
+}
+
+function showDetail(nodeId, { focus = false } = {}) {
+  selectedNodeId = nodeId;
+  updateSelectedIndicator();
+  updateLinkHighlight();
+  if (focus) focusNode(nodeId);
+
+  const node = currentGraph.nodes.find(n => n.id === nodeId);
+  if (!node) return;
+
+  const nodeMap = new Map(currentGraph.nodes.map(n => [n.id, n]));
+  const links = currentGraph.edges
+    .filter(e => e.a === nodeId || e.b === nodeId)
+    .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+
+  const h = [];
+  h.push(`<div class="dp-title">${node.name || node.shortId || nodeId.slice(0, 8)}</div>`);
+  h.push(`<div class="dp-id">${nodeId}</div>`);
+  if (node.mode)     h.push(`<div class="dp-row">Mode: <span>${node.mode}</span></div>`);
+  if (node.model)    h.push(`<div class="dp-row">Model: <span>${node.model}</span></div>`);
+  if (node.firmware) h.push(`<div class="dp-row">FW: <span>${node.firmware}</span></div>`);
+  if (node.radio)    h.push(`<div class="dp-row">Radio: <span>${node.radio}</span></div>`);
+  h.push(`<div class="dp-row">Last seen: <span>${relTime(node.lastSeen)}</span></div>`);
+  if (node.stats) {
+    const s = node.stats;
+    if (s.battery_mv)          h.push(`<div class="dp-row">Battery: <span>${(s.battery_mv / 1000).toFixed(2)} V</span></div>`);
+    if (s.last_snr != null)    h.push(`<div class="dp-row">Last SNR: <span>${(s.last_snr / 4).toFixed(2)} dB</span></div>`);
+    if (s.last_rssi != null)   h.push(`<div class="dp-row">Last RSSI: <span>${s.last_rssi} dBm</span></div>`);
+    if (s.noise_floor != null) h.push(`<div class="dp-row">Noise floor: <span>${s.noise_floor} dBm</span></div>`);
+  }
+
+  if (links.length > 0) {
+    const renderLinks = (group, title) => {
+      if (group.length === 0) return;
+      h.push(`<div class="dp-section"><div class="dp-section-title">${title} (${group.length})</div>`);
+      for (const e of group) {
+        const neighborId = e.a === nodeId ? e.b : e.a;
+        const neighbor = nodeMap.get(neighborId);
+        const neighborName = neighbor?.name || neighborId.slice(0, 8);
+        const isA = e.a === nodeId;
+        const snrOut = isA ? e.snrAB : e.snrBA;
+        const snrIn  = isA ? e.snrBA : e.snrAB;
+        h.push(`<div class="dp-link" data-neighbor-id="${neighborId}">`);
+        h.push(`<div class="dp-link-name">${neighborName}</div>`);
+        if (snrOut != null) h.push(`<div class="dp-link-row">TX → neighbor: <span style="color:${snrColor(snrOut)}">${snrOut.toFixed(2)} dB</span></div>`);
+        if (snrIn  != null) h.push(`<div class="dp-link-row">RX ← neighbor: <span style="color:${snrColor(snrIn)}">${snrIn.toFixed(2)} dB</span></div>`);
+        h.push(`<div class="dp-link-row">Last seen: <span>${relTime(e.lastSeen)}</span></div>`);
+        h.push(`</div>`);
+      }
+      h.push(`</div>`);
+    };
+
+    const neighborMode = e => nodeMap.get(e.a === nodeId ? e.b : e.a)?.mode?.toLowerCase();
+    renderLinks(links.filter(e => neighborMode(e) === 'repeater'),                                          'Repeaters');
+    renderLinks(links.filter(e => neighborMode(e) === 'room server'),                                        'Room Servers');
+    renderLinks(links.filter(e => neighborMode(e) && neighborMode(e) !== 'repeater' && neighborMode(e) !== 'room server'), 'Companions');
+    renderLinks(links.filter(e => !neighborMode(e)),                                                        'Unknown');
+  }
+
+  document.getElementById('detail-content').innerHTML = h.join('');
+  document.getElementById('detail-panel').classList.add('open');
+}
+
+function closeDetail() {
+  document.getElementById('detail-panel').classList.remove('open');
+  selectedNodeId = null;
+  updateSelectedIndicator();
+  updateLinkHighlight();
+}
+
+document.getElementById('detail-close').addEventListener('click', closeDetail);
+svg.on('click', closeDetail);
+
+document.getElementById('detail-content').addEventListener('click', e => {
+  const item = e.target.closest('[data-neighbor-id]');
+  if (item) showDetail(item.dataset.neighborId, { focus: true });
+});
+
+// ── Search ────────────────────────────────────────────────────────────────────
+const searchInput   = document.getElementById('search-input');
+const searchResults = document.getElementById('search-results');
+
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim().toLowerCase();
+  if (!q) { searchResults.classList.remove('open'); return; }
+  const matches = currentGraph.nodes
+    .filter(n => (n.name && n.name.toLowerCase().includes(q)) || n.id.toLowerCase().includes(q))
+    .sort((a, b) => {
+      const aPrefix = a.id.toLowerCase().startsWith(q) ? 0 : 1;
+      const bPrefix = b.id.toLowerCase().startsWith(q) ? 0 : 1;
+      return aPrefix - bPrefix;
+    })
+    .slice(0, 10);
+  if (matches.length === 0) { searchResults.classList.remove('open'); return; }
+  searchResults.innerHTML = matches.map(n => `
+    <div class="sr-item" data-node-id="${n.id}">
+      ${n.name || n.shortId}
+      <div class="sr-item-sub">${n.id.slice(0, 16)}…</div>
+    </div>`).join('');
+  searchResults.classList.add('open');
+});
+
+searchResults.addEventListener('click', e => {
+  const item = e.target.closest('[data-node-id]');
+  if (!item) return;
+  const nodeId = item.dataset.nodeId;
+  searchInput.value = '';
+  searchResults.classList.remove('open');
+  showDetail(nodeId, { focus: true });
+});
+
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { searchInput.value = ''; searchResults.classList.remove('open'); }
+});
+
+document.addEventListener('click', e => {
+  if (!document.getElementById('search-wrap').contains(e.target))
+    searchResults.classList.remove('open');
+});
 
 // ── Socket.io ─────────────────────────────────────────────────────────────────
 const socket = io();
