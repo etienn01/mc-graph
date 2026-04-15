@@ -134,6 +134,7 @@ function resolveHop(shortHash) {
 function stripPathForDecoder(rawHex) {
   const bytes = Buffer.from(rawHex, 'hex');
   const routeType  = bytes[0] & 0x03;
+  // TRANSPORT_DIRECT (0x03) has 4 transport-code bytes before the path; DIRECT (0x02) doesn't
   const pathOffset = routeType === 0x03 ? 5 : 1;
   const pathLenByte  = bytes[pathOffset];
   const hopCount     = pathLenByte & 0x3F;
@@ -149,7 +150,7 @@ function parseTraceSNRs(rawHex) {
   if (!rawHex || rawHex.length < 4) return [];
   const bytes = Buffer.from(rawHex, 'hex');
   const routeType = bytes[0] & 0x03;
-  // TRANSPORT_FLOOD (0x03) has 4 transport-code bytes before the path; others don't
+  // TRANSPORT_DIRECT (0x03) has 4 transport-code bytes before the path; DIRECT (0x02) doesn't
   const pathOffset = routeType === 0x03 ? 5 : 1;
   const pathLenByte = bytes[pathOffset];
   const hopCount    = pathLenByte & 0x3F;
@@ -172,9 +173,9 @@ function parseFloodPath(rawHex) {
   if (!rawHex || rawHex.length < 4) return null;
   const bytes = Buffer.from(rawHex, 'hex');
   const routeType = bytes[0] & 0x03;
-  // 0x01 = FLOOD, 0x03 = TRANSPORT_FLOOD (4 extra transport-code bytes before path)
-  if (routeType !== 0x01 && routeType !== 0x03) return null;
-  const pathOffset = routeType === 0x03 ? 5 : 1;
+  // 0x00 = TRANSPORT_FLOOD (4 transport-code bytes before path), 0x01 = FLOOD
+  if (routeType !== 0x01 && routeType !== 0x00) return null;
+  const pathOffset = routeType === 0x00 ? 5 : 1;
 
   const pathLenByte = bytes[pathOffset];
   const hopCount    = pathLenByte & 0x3F;
@@ -299,7 +300,7 @@ mqttClient.on('message', (topic, payload) => {
           const resolvedHops = trace.pathHashes.map(h => resolveHop(h)).filter(Boolean);
 
           const routeType = Buffer.from(data.raw, 'hex')[0] & 0x03;
-          const isDirect  = routeType === 0x00 || routeType === 0x02;
+          const isDirect  = routeType === 0x02 || routeType === 0x03;
 
           const chain = isDirect
             ? [originId, ...resolvedHops, originId]
