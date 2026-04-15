@@ -140,7 +140,8 @@ function stripPathForDecoder(rawHex) {
   const hopCount     = pathLenByte & 0x3F;
   const bytesPerHop  = (pathLenByte >> 6) + 1;
   const payloadStart = pathOffset + 1 + hopCount * bytesPerHop;
-  return Buffer.concat([bytes.slice(0, 1), Buffer.from([0x00]), bytes.slice(payloadStart)]).toString('hex');
+  // Preserve the full prefix (header + transport codes if any), zero out the path count
+  return Buffer.concat([bytes.slice(0, pathOffset), Buffer.from([0x00]), bytes.slice(payloadStart)]).toString('hex');
 }
 
 // ── Trace path SNR parser ─────────────────────────────────────────────────────
