@@ -527,6 +527,7 @@ function showDetail(nodeId, { focus = false } = {}) {
   if (node.model)    h.push(`<div class="dp-row">Model: <span>${node.model}</span></div>`);
   if (node.firmware) h.push(`<div class="dp-row">FW: <span>${node.firmware}</span></div>`);
   if (node.radio)    h.push(`<div class="dp-row">Radio: <span>${node.radio}</span></div>`);
+  if (node.firstSeen) h.push(`<div class="dp-row">First seen: <span>${relTime(node.firstSeen)}</span></div>`);
   h.push(`<div class="dp-row">Last seen: <span>${relTime(node.lastSeen)}</span></div>`);
   if (node.stats) {
     const s = node.stats;

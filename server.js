@@ -25,7 +25,7 @@ function loadState() {
   try {
     const raw = fs.readFileSync(STATE_FILE, 'utf8');
     const { nodes: ns, edges: es } = JSON.parse(raw);
-    ns.forEach(n => nodes.set(n.id, n));
+    ns.forEach(n => nodes.set(n.id, { firstSeen: n.lastSeen, ...n }));
     const fallback = Date.now() - 5 * 24 * 60 * 60 * 1000;
     es.forEach(e => {
       const edgeFallback = Math.min(
@@ -59,7 +59,7 @@ function nodeShortId(id) { return id.slice(0, 8); }
 function updateNode(id, data) {
   id = normaliseId(id);
   const isNew = !nodes.has(id);
-  const existing = nodes.get(id) || { id, shortId: nodeShortId(id) };
+  const existing = nodes.get(id) || { id, shortId: nodeShortId(id), firstSeen: Date.now() };
   const clean = Object.fromEntries(Object.entries(data).filter(([k, v]) => v != null && k !== 'id' && k !== 'shortId'));
   nodes.set(id, { ...existing, ...clean, lastSeen: Date.now() });
   return isNew || Object.keys(clean).some(k => JSON.stringify(existing[k]) !== JSON.stringify(clean[k]));
@@ -221,7 +221,8 @@ function mergeShortNode(fullId) {
   }
 }
 
-const STALE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const STALE_MS        = 7 * 24 * 60 * 60 * 1000; // 7 days
+const NO_ADVERT_MS    = 24 * 60 * 60 * 1000;      // 24 hours
 
 function pruneStale() {
   const cutoff = Date.now() - STALE_MS;
@@ -239,6 +240,10 @@ function pruneStale() {
   const connectedIds = new Set(Array.from(edges.values()).flatMap(e => [e.a, e.b]));
   for (const id of nodes.keys()) {
     if (!connectedIds.has(id)) nodes.delete(id);
+  }
+  const advertCutoff = Date.now() - NO_ADVERT_MS;
+  for (const [id, node] of nodes) {
+    if (!node.name && !node.mode && (node.firstSeen || 0) < advertCutoff) nodes.delete(id);
   }
 }
 
