@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>MeshCore Graph</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -184,6 +185,36 @@
   .dp-link-row span { color: #bbb; }
   .dp-link[data-neighbor-id] { cursor: pointer; }
   .dp-link[data-neighbor-id]:hover { border-color: #4a4d5a; background: #161820; }
+
+  /* ── Mobile ────────────────────────────────────────────────────────────── */
+  @media (max-width: 640px) {
+    header h1 { display: none; }
+
+    #search-input { width: 140px; }
+    #search-results { width: 260px; }
+
+    #detail-panel {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      width: 100%;
+      max-height: 55vh;
+      border-left: none;
+      border-top: 1px solid #2a2d3a;
+      border-radius: 12px 12px 0 0;
+      z-index: 20;
+      padding: 14px 16px 24px;
+    }
+    #detail-panel.open { display: block; }
+
+    #detail-panel::before {
+      content: '';
+      display: block;
+      width: 36px; height: 4px;
+      background: #3a3d50;
+      border-radius: 2px;
+      margin: 0 auto 14px;
+    }
+  }
 
 </style>
 </head>
@@ -443,10 +474,36 @@ function updateLinkHighlight() {
 function focusNode(nodeId) {
   const node = currentNodes.find(n => n.id === nodeId);
   if (!node || node.x == null) return;
-  const t = d3.zoomTransform(svg.node());
-  svg.transition().duration(500).call(
+
+  const neighborIds = new Set(
+    currentGraph.edges
+      .filter(e => e.a === nodeId || e.b === nodeId)
+      .map(e => e.a === nodeId ? e.b : e.a)
+  );
+  const group = currentNodes.filter(n => n.id === nodeId || neighborIds.has(n.id));
+
+  const panel = document.getElementById('detail-panel');
+  const isMobile = window.innerWidth <= 640;
+  const panelH = isMobile && panel.classList.contains('open') ? panel.offsetHeight : 0;
+  const panelW = !isMobile && panel.classList.contains('open') ? panel.offsetWidth : 0;
+  const availW = width - panelW;
+  const availH = height - panelH;
+
+  const pad = 80;
+  const xs = group.map(n => n.x);
+  const ys = group.map(n => n.y);
+  const minX = Math.min(...xs) - pad;
+  const maxX = Math.max(...xs) + pad;
+  const minY = Math.min(...ys) - pad;
+  const maxY = Math.max(...ys) + pad;
+
+  const scale = Math.min(availW / (maxX - minX), availH / (maxY - minY), 2);
+  const tx = availW / 2 - scale * (minX + maxX) / 2;
+  const ty = availH / 2 - scale * (minY + maxY) / 2;
+
+  svg.transition().duration(600).call(
     zoom.transform,
-    d3.zoomIdentity.translate(width / 2, height / 2).scale(t.k).translate(-node.x, -node.y)
+    d3.zoomIdentity.translate(tx, ty).scale(scale)
   );
 }
 
@@ -454,7 +511,6 @@ function showDetail(nodeId, { focus = false } = {}) {
   selectedNodeId = nodeId;
   updateSelectedIndicator();
   updateLinkHighlight();
-  if (focus) focusNode(nodeId);
 
   const node = currentGraph.nodes.find(n => n.id === nodeId);
   if (!node) return;
@@ -510,6 +566,7 @@ function showDetail(nodeId, { focus = false } = {}) {
 
   document.getElementById('detail-content').innerHTML = h.join('');
   document.getElementById('detail-panel').classList.add('open');
+  if (focus) focusNode(nodeId);
 }
 
 function closeDetail() {
