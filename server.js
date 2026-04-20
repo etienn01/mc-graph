@@ -124,7 +124,12 @@ function resolveHop(shortHash) {
       if (!mode || mode === 'repeater') matches.push(id);
     }
   }
-  return matches.length === 1 ? matches[0] : null;
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1)  return null;
+  // No full-length match — reuse an existing ghost that is a prefix of ours
+  const ghosts = [...nodes.keys()].filter(id => id.length <= prefix.length && prefix.startsWith(id));
+  if (ghosts.length === 1) return ghosts[0];
+  return prefix;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
