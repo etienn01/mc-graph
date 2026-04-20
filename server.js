@@ -124,7 +124,7 @@ function resolveHop(shortHash) {
       if (!mode || mode === 'repeater') matches.push(id);
     }
   }
-  return matches.length === 1 ? matches[0] : prefix;
+  return matches.length === 1 ? matches[0] : null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -303,7 +303,13 @@ mqttClient.on('message', (topic, payload) => {
         const snrValues  = parseTraceSNRs(data.raw);
 
         if (trace?.isValid && trace.pathHashes?.length > 0) {
-          const resolvedHops = trace.pathHashes.map(h => resolveHop(h)).filter(Boolean);
+          // flags bits 0-1 = path_sz; bytesPerHop = 1 << path_sz (firmware spec v1.11+)
+          const bph = 1 << (trace.flags & 0x03);
+          const groupedHashes = [];
+          for (let i = 0; i + bph <= trace.pathHashes.length; i += bph) {
+            groupedHashes.push(trace.pathHashes.slice(i, i + bph).join(''));
+          }
+          const resolvedHops = groupedHashes.map(h => resolveHop(h));
 
           const routeType = Buffer.from(data.raw, 'hex')[0] & 0x03;
           const isDirect  = routeType === 0x02 || routeType === 0x03;
@@ -319,6 +325,7 @@ mqttClient.on('message', (topic, payload) => {
             // Any node that overhears the final relay's broadcast gets the fully-accumulated
             // packet and looks like the true initiator. Those links are captured by FLOOD.
             if (isDirect && (isFirst || isLast)) continue;
+            if (!chain[i] || !chain[i + 1]) continue;
             const edgeSnr = isLast ? (snr ?? snrValues[i] ?? null) : (snrValues[i] ?? null);
             if (edgeSnr != null) {
               changed = updateNode(chain[i], {}) || changed;
