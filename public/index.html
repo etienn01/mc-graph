@@ -329,23 +329,35 @@ window.addEventListener('resize', () => {
 // Tooltip
 const tooltip = document.getElementById('tooltip');
 
+function mk(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
+function mkRow(cls, label, value, color) {
+  const d = mk('div', cls);
+  d.append(label + ': ');
+  const s = mk('span');
+  s.textContent = value;
+  if (color) s.style.color = color;
+  d.appendChild(s);
+  return d;
+}
+const dpRow     = (label, value, color) => mkRow('dp-row',      label, value, color);
+const dpLinkRow = (label, value, color) => mkRow('dp-link-row', label, value, color);
+const tipRow    = (label, value)        => mkRow('tip-row',     label, value);
+
 function showTooltip(event, node) {
-  const lines = [];
-  if (node.name) lines.push(`<div class="tip-title">${node.name}</div>`);
-  lines.push(`<div class="tip-row">ID: <span>${node.id.slice(0, 16)}…</span></div>`);
-  if (node.mode)     lines.push(`<div class="tip-row">Mode: <span>${node.mode}</span></div>`);
-  if (node.model)    lines.push(`<div class="tip-row">Model: <span>${node.model}</span></div>`);
-  if (node.firmware) lines.push(`<div class="tip-row">FW: <span>${node.firmware}</span></div>`);
-  if (node.radio)    lines.push(`<div class="tip-row">Radio: <span>${node.radio}</span></div>`);
+  tooltip.replaceChildren();
+  if (node.name) { const t = mk('div', 'tip-title'); t.textContent = node.name; tooltip.appendChild(t); }
+  tooltip.appendChild(tipRow('ID', node.id.slice(0, 16) + '…'));
+  if (node.mode)     tooltip.appendChild(tipRow('Mode', node.mode));
+  if (node.model)    tooltip.appendChild(tipRow('Model', node.model));
+  if (node.firmware) tooltip.appendChild(tipRow('FW', node.firmware));
+  if (node.radio)    tooltip.appendChild(tipRow('Radio', node.radio));
   if (node.stats) {
     const s = node.stats;
-    if (s.battery_mv) lines.push(`<div class="tip-row">Battery: <span>${(s.battery_mv/1000).toFixed(2)}V</span></div>`);
-    if (s.last_snr != null) lines.push(`<div class="tip-row">Last SNR: <span>${(s.last_snr/4).toFixed(2)} dB</span></div>`);
-    if (s.last_rssi != null) lines.push(`<div class="tip-row">Last RSSI: <span>${s.last_rssi} dBm</span></div>`);
-    if (s.noise_floor != null) lines.push(`<div class="tip-row">Noise floor: <span>${s.noise_floor} dBm</span></div>`);
+    if (s.battery_mv)          tooltip.appendChild(tipRow('Battery', `${(s.battery_mv/1000).toFixed(2)}V`));
+    if (s.last_snr != null)    tooltip.appendChild(tipRow('Last SNR', `${(s.last_snr/4).toFixed(2)} dB`));
+    if (s.last_rssi != null)   tooltip.appendChild(tipRow('Last RSSI', `${s.last_rssi} dBm`));
+    if (s.noise_floor != null) tooltip.appendChild(tipRow('Noise floor', `${s.noise_floor} dBm`));
   }
-
-  tooltip.innerHTML = lines.join('');
   tooltip.style.display = 'block';
   moveTooltip(event);
 }
@@ -538,52 +550,64 @@ function showDetail(nodeId, { focus = false } = {}) {
     .filter(e => e.a === nodeId || e.b === nodeId)
     .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
 
-  const h = [];
-  h.push(`<div class="dp-title">${node.name || node.shortId || nodeId.slice(0, 8)}</div>`);
-  h.push(`<div class="dp-id">${nodeId}</div>`);
-  if (node.mode)     h.push(`<div class="dp-row">Mode: <span>${node.mode}</span></div>`);
-  if (node.model)    h.push(`<div class="dp-row">Model: <span>${node.model}</span></div>`);
-  if (node.firmware) h.push(`<div class="dp-row">FW: <span>${node.firmware}</span></div>`);
-  if (node.radio)    h.push(`<div class="dp-row">Radio: <span>${node.radio}</span></div>`);
-  if (node.firstSeen) h.push(`<div class="dp-row">First seen: <span>${relTime(node.firstSeen)}</span></div>`);
-  h.push(`<div class="dp-row">Last seen: <span>${relTime(node.lastSeen)}</span></div>`);
+  const content = document.getElementById('detail-content');
+  content.replaceChildren();
+
+  const titleEl = mk('div', 'dp-title');
+  titleEl.textContent = node.name || node.shortId || nodeId.slice(0, 8);
+  content.appendChild(titleEl);
+
+  const idEl = mk('div', 'dp-id');
+  idEl.textContent = nodeId;
+  content.appendChild(idEl);
+
+  if (node.mode)     content.appendChild(dpRow('Mode', node.mode));
+  if (node.model)    content.appendChild(dpRow('Model', node.model));
+  if (node.firmware) content.appendChild(dpRow('FW', node.firmware));
+  if (node.radio)    content.appendChild(dpRow('Radio', node.radio));
+  if (node.firstSeen) content.appendChild(dpRow('First seen', relTime(node.firstSeen)));
+  content.appendChild(dpRow('Last seen', relTime(node.lastSeen)));
   if (node.stats) {
     const s = node.stats;
-    if (s.battery_mv)          h.push(`<div class="dp-row">Battery: <span>${(s.battery_mv / 1000).toFixed(2)} V</span></div>`);
-    if (s.last_snr != null)    h.push(`<div class="dp-row">Last SNR: <span>${(s.last_snr / 4).toFixed(2)} dB</span></div>`);
-    if (s.last_rssi != null)   h.push(`<div class="dp-row">Last RSSI: <span>${s.last_rssi} dBm</span></div>`);
-    if (s.noise_floor != null) h.push(`<div class="dp-row">Noise floor: <span>${s.noise_floor} dBm</span></div>`);
+    if (s.battery_mv)          content.appendChild(dpRow('Battery', `${(s.battery_mv / 1000).toFixed(2)} V`));
+    if (s.last_snr != null)    content.appendChild(dpRow('Last SNR', `${(s.last_snr / 4).toFixed(2)} dB`));
+    if (s.last_rssi != null)   content.appendChild(dpRow('Last RSSI', `${s.last_rssi} dBm`));
+    if (s.noise_floor != null) content.appendChild(dpRow('Noise floor', `${s.noise_floor} dBm`));
   }
 
   if (links.length > 0) {
-    const renderLinks = (group, title) => {
+    const renderLinks = (group, groupTitle) => {
       if (group.length === 0) return;
-      h.push(`<div class="dp-section"><div class="dp-section-title">${title} (${group.length})</div>`);
+      const section = mk('div', 'dp-section');
+      const sTitle = mk('div', 'dp-section-title');
+      sTitle.textContent = `${groupTitle} (${group.length})`;
+      section.appendChild(sTitle);
       for (const e of group) {
         const neighborId = e.a === nodeId ? e.b : e.a;
         const neighbor = nodeMap.get(neighborId);
-        const neighborName = neighbor?.name || neighborId.slice(0, 8);
         const isA = e.a === nodeId;
         const snrOut = isA ? e.snrAB : e.snrBA;
         const snrIn  = isA ? e.snrBA : e.snrAB;
-        h.push(`<div class="dp-link" data-neighbor-id="${neighborId}">`);
-        h.push(`<div class="dp-link-name">${neighborName}</div>`);
-        if (snrOut != null) h.push(`<div class="dp-link-row">TX → neighbor: <span style="color:${snrColor(snrOut)}">${snrOut.toFixed(2)} dB</span></div>`);
-        if (snrIn  != null) h.push(`<div class="dp-link-row">RX ← neighbor: <span style="color:${snrColor(snrIn)}">${snrIn.toFixed(2)} dB</span></div>`);
-        h.push(`<div class="dp-link-row">Last seen: <span>${relTime(e.lastSeen)}</span></div>`);
-        h.push(`</div>`);
+        const link = mk('div', 'dp-link');
+        link.dataset.neighborId = neighborId;
+        const nameEl = mk('div', 'dp-link-name');
+        nameEl.textContent = neighbor?.name || neighborId.slice(0, 8);
+        link.appendChild(nameEl);
+        if (snrOut != null) link.appendChild(dpLinkRow('TX → neighbor', `${snrOut.toFixed(2)} dB`, snrColor(snrOut)));
+        if (snrIn  != null) link.appendChild(dpLinkRow('RX ← neighbor', `${snrIn.toFixed(2)} dB`, snrColor(snrIn)));
+        link.appendChild(dpLinkRow('Last seen', relTime(e.lastSeen)));
+        section.appendChild(link);
       }
-      h.push(`</div>`);
+      content.appendChild(section);
     };
 
     const neighborMode = e => nodeMap.get(e.a === nodeId ? e.b : e.a)?.mode?.toLowerCase();
-    renderLinks(links.filter(e => neighborMode(e) === 'repeater'),                                          'Repeaters');
-    renderLinks(links.filter(e => neighborMode(e) === 'room server'),                                        'Room Servers');
-    renderLinks(links.filter(e => neighborMode(e) && neighborMode(e) !== 'repeater' && neighborMode(e) !== 'room server'), 'Companions');
-    renderLinks(links.filter(e => !neighborMode(e)),                                                        'Unknown');
+    renderLinks(links.filter(e => neighborMode(e) === 'repeater'),                                                          'Repeaters');
+    renderLinks(links.filter(e => neighborMode(e) === 'room server'),                                                       'Room Servers');
+    renderLinks(links.filter(e => neighborMode(e) && neighborMode(e) !== 'repeater' && neighborMode(e) !== 'room server'),  'Companions');
+    renderLinks(links.filter(e => !neighborMode(e)),                                                                        'Unknown');
   }
 
-  document.getElementById('detail-content').innerHTML = h.join('');
   document.getElementById('detail-panel').classList.add('open');
   if (focus) focusNode(nodeId);
 }
@@ -619,11 +643,15 @@ searchInput.addEventListener('input', () => {
     })
     .slice(0, 10);
   if (matches.length === 0) { searchResults.classList.remove('open'); return; }
-  searchResults.innerHTML = matches.map(n => `
-    <div class="sr-item" data-node-id="${n.id}">
-      ${n.name || n.shortId}
-      <div class="sr-item-sub">${n.id.slice(0, 16)}…</div>
-    </div>`).join('');
+  searchResults.replaceChildren(...matches.map(n => {
+    const item = mk('div', 'sr-item');
+    item.dataset.nodeId = n.id;
+    item.append(n.name || n.shortId);
+    const sub = mk('div', 'sr-item-sub');
+    sub.textContent = n.id.slice(0, 16) + '…';
+    item.appendChild(sub);
+    return item;
+  }));
   searchResults.classList.add('open');
 });
 
