@@ -83,6 +83,18 @@
   }
   #toggle-ghosts.active { border-color: #7eb8f7; color: #7eb8f7; }
 
+  #time-filter {
+    background: #1a1d27;
+    border: 1px solid #2a2d3a;
+    color: #666;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: .75rem;
+    cursor: pointer;
+    outline: none;
+    white-space: nowrap;
+  }
+
   #status-indicator {
     display: flex;
     align-items: center;
@@ -240,6 +252,11 @@
     <div id="search-results"></div>
   </div>
   <button id="toggle-ghosts" title="Show/hide nodes with no ADVERT received (unknown nodes)">Unknown: off</button>
+  <select id="time-filter">
+    <option value="1">Last 1 day</option>
+    <option value="3" selected>Last 3 days</option>
+    <option value="7">Last 7 days</option>
+  </select>
   <div id="status-indicator">
     <div id="status-dot"></div>
     <span id="status-text">Connecting…</span>
@@ -313,16 +330,16 @@ const linkLabelBA = g.append('g').attr('class', 'link-labels-ba'); // snrBA near
 const nodeGroup = g.append('g').attr('class', 'nodes');
 
 const simulation = d3.forceSimulation()
-  .force('link', d3.forceLink().id(d => d.id).distance(280).strength(0.3))
-  .force('charge', d3.forceManyBody().strength(-1800))
-  .force('center', d3.forceCenter(width / 2, height / 2).strength(0.03))
-  .force('collision', d3.forceCollide(70));
+  .alphaDecay(0.01)
+  .force('link', d3.forceLink().id(d => d.id).distance(420).strength(0.15))
+  .force('charge', d3.forceManyBody().strength(-4500).theta(0.7))
+  .force('center', d3.forceCenter(width / 2, height / 2).strength(0.02));
 
 // Keep center force updated on resize
 window.addEventListener('resize', () => {
   width = container.clientWidth;
   height = container.clientHeight;
-  simulation.force('center', d3.forceCenter(width / 2, height / 2).strength(0.03));
+  simulation.force('center', d3.forceCenter(width / 2, height / 2).strength(0.02));
   simulation.alpha(0.1).restart();
 });
 
@@ -384,6 +401,13 @@ let showGhosts = false;
 function isGhost(n) { return !n.name && !n.mode; }
 function visibleNodes() { return showGhosts ? currentGraph.nodes : currentGraph.nodes.filter(n => !isGhost(n)); }
 
+let edgeMaxAgeDays = 3;
+function visibleEdges() {
+  if (!edgeMaxAgeDays) return currentGraph.edges;
+  const cutoff = Date.now() - edgeMaxAgeDays * 86400000;
+  return currentGraph.edges.filter(e => (e.lastSeen || 0) >= cutoff);
+}
+
 function render(graph) {
   currentGraph = graph;
   if (selectedNodeId) showDetail(selectedNodeId);
@@ -396,21 +420,22 @@ function render(graph) {
   const nodeMap = new Map();
   const newNodes = visibleNodes().map(n => {
     const cached = positionCache.get(n.id);
-    return { ...n, ...(cached || { x: width / 2 + (Math.random() - .5) * 200, y: height / 2 + (Math.random() - .5) * 200 }) };
+    return { ...n, ...(cached || { x: width / 2 + (Math.random() - .5) * 700, y: height / 2 + (Math.random() - .5) * 700 }) };
   });
   newNodes.forEach(n => nodeMap.set(n.id, n));
 
-  const newEdges = graph.edges
+  const newEdges = visibleEdges()
     .filter(e => nodeMap.has(e.a) && nodeMap.has(e.b))
     .map(e => ({ ...e, source: e.a, target: e.b }));
 
-  currentNodes = newNodes;
+  const connectedIds = new Set(newEdges.flatMap(e => [e.a, e.b]));
+  const filteredNodes = newNodes.filter(n => connectedIds.has(n.id));
+  currentNodes = filteredNodes;
 
   // Links
   const link = linkGroup.selectAll('.link').data(newEdges, d => `${d.a}:${d.b}`);
   link.enter().append('line').attr('class', 'link');
   link.exit().remove();
-  updateLinkHighlight();
 
   // Link labels: one near each endpoint (snrAB near target B, snrBA near source A)
   const lab = linkLabelAB.selectAll('.link-label').data(newEdges, d => `${d.a}:${d.b}`);
@@ -422,9 +447,10 @@ function render(graph) {
   lba.enter().append('text').attr('class', 'link-label');
   lba.exit().remove();
   linkLabelBA.selectAll('.link-label').text(d => d.snrBA != null ? `${d.snrBA.toFixed(2)}dB` : '');
+  updateLinkHighlight();
 
   // Nodes
-  const node = nodeGroup.selectAll('.node').data(newNodes, d => d.id);
+  const node = nodeGroup.selectAll('.node').data(filteredNodes, d => d.id);
 
   const nodeEnter = node.enter().append('g').attr('class', 'node')
     .call(d3.drag()
@@ -449,7 +475,7 @@ function render(graph) {
   updateSelectedIndicator();
 
   simulation
-    .nodes(newNodes)
+    .nodes(filteredNodes)
     .on('tick', () => {
       linkGroup.selectAll('.link')
         .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
@@ -546,7 +572,7 @@ function showDetail(nodeId, { focus = false } = {}) {
   if (!node) return;
 
   const nodeMap = new Map(visibleNodes().map(n => [n.id, n]));
-  const links = currentGraph.edges
+  const links = visibleEdges()
     .filter(e => e.a === nodeId || e.b === nodeId)
     .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
 
@@ -678,6 +704,11 @@ toggleGhostsBtn.addEventListener('click', () => {
   showGhosts = !showGhosts;
   toggleGhostsBtn.textContent = `Unknown: ${showGhosts ? 'on' : 'off'}`;
   toggleGhostsBtn.classList.toggle('active', showGhosts);
+  render(currentGraph);
+});
+
+document.getElementById('time-filter').addEventListener('change', e => {
+  edgeMaxAgeDays = Number(e.target.value);
   render(currentGraph);
 });
 

@@ -323,19 +323,22 @@ mqttClient.on('message', (topic, payload) => {
             ? [originId, ...resolvedHops, originId]
             : [...resolvedHops, originId];
 
-          for (let i = 0; i < chain.length - 1; i++) {
-            const isFirst = i === 0;
-            const isLast  = i === chain.length - 2;
-            // For DIRECT traces, skip the endpoint hops (originId ↔ first/last relay).
-            // Any node that overhears the final relay's broadcast gets the fully-accumulated
-            // packet and looks like the true initiator. Those links are captured by FLOOD.
-            if (isDirect && (isFirst || isLast)) continue;
-            if (!chain[i] || !chain[i + 1]) continue;
-            const edgeSnr = isLast ? (snr ?? snrValues[i] ?? null) : (snrValues[i] ?? null);
-            if (edgeSnr != null) {
-              changed = updateNode(chain[i], {}) || changed;
-              changed = updateNode(chain[i + 1], {}) || changed;
-              changed = recordLink(chain[i], chain[i + 1], edgeSnr) || changed;
+          // 1-byte hop hashes are too short to resolve reliably — skip edge creation
+          if (bph > 1) {
+            for (let i = 0; i < chain.length - 1; i++) {
+              const isFirst = i === 0;
+              const isLast  = i === chain.length - 2;
+              // For DIRECT traces, skip the endpoint hops (originId ↔ first/last relay).
+              // Any node that overhears the final relay's broadcast gets the fully-accumulated
+              // packet and looks like the true initiator. Those links are captured by FLOOD.
+              if (isDirect && (isFirst || isLast)) continue;
+              if (!chain[i] || !chain[i + 1]) continue;
+              const edgeSnr = isLast ? (snr ?? snrValues[i] ?? null) : (snrValues[i] ?? null);
+              if (edgeSnr != null) {
+                changed = updateNode(chain[i], {}) || changed;
+                changed = updateNode(chain[i + 1], {}) || changed;
+                changed = recordLink(chain[i], chain[i + 1], edgeSnr) || changed;
+              }
             }
           }
         }
@@ -348,11 +351,14 @@ mqttClient.on('message', (topic, payload) => {
         : [];
       if (resolved.length > 0) {
         resolved.forEach(h => { changed = updateNode(h, {}) || changed; });
-        for (let i = 0; i < resolved.length - 1; i++) {
-          changed = recordLink(resolved[i], resolved[i + 1], null) || changed;
+        // 1-byte hop hashes are too short to resolve reliably — skip edge creation
+        if (hops[0].length > 2) {
+          for (let i = 0; i < resolved.length - 1; i++) {
+            changed = recordLink(resolved[i], resolved[i + 1], null) || changed;
+          }
+          // Last hop → observer: proven direct RF link with SNR
+          changed = recordLink(resolved[resolved.length - 1], originId, snr) || changed;
         }
-        // Last hop → observer: proven direct RF link with SNR
-        changed = recordLink(resolved[resolved.length - 1], originId, snr) || changed;
       }
 
       // ADVERT: use meshcore-decoder for name/mode/location.
